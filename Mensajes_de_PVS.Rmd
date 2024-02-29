@@ -1,0 +1,310 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+rm(list=ls())
+library(XML)
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(openxlsx)
+library(reshape2)
+library(lubridate)
+```
+
+```{r}
+confirmacion_PV_2024_02<-read_excel("C:/Users/Soporte/Downloads/confirmacion_PV 2024 - 02.xlsx")
+
+Plantillas_Clinicas_email <- read_excel("C:/Users/Soporte/Downloads/Plantillas Clinicas - email.xlsx", sheet = "clinicas")
+
+confirmacion_O_2024_02 <- read_excel("C:/Users/Soporte/Downloads/confirmacion_O 2024 - 02.xlsx")
+```
+
+Separacion de variable del celular y arreglos a la base general
+```{r}
+#Separación de variable celular
+confirmacion_PV_2024_02 <- separate(confirmacion_PV_2024_02, col = ASUNTO_CITA, into = c("Nombre", "otro"), sep = "\\[")
+
+confirmacion_PV_2024_02 <- separate(confirmacion_PV_2024_02, col = otro, into = c("celular", "otro"), sep = "\\]")
+
+confirmacion_PV_2024_02 <- separate(confirmacion_PV_2024_02, col = celular, into = c("celular_principal", "numero_secundario"), sep = "-")
+
+# Llenar numeros de celular vacios
+confirmacion_PV_2024_02<- confirmacion_PV_2024_02 %>% 
+  mutate(Celular_final= if_else(celular_principal== "  ",numero_secundario, celular_principal))
+
+#Eliminar numeros celulares fijos
+confirmacion_PV_2024_02 <- subset(confirmacion_PV_2024_02, grepl("^3|^\\s", celular_principal))
+
+#Convertir variable a tipo fecha
+confirmacion_PV_2024_02$FECHA_CITA<- as.Date(confirmacion_PV_2024_02$FECHA_CITA, format =  "%d/%m/%Y")
+```
+
+Arreglos para la base de mensajes completa
+```{r}
+#Flitrar fecha
+Base_SMS_completa <- confirmacion_PV_2024_02 %>% 
+  filter(FECHA_CITA== today())
+
+#FILTRO DE NOMBRE
+Base_SMS_completa <- separate(Base_SMS_completa, col = PACIENTE, into = c("Nombre", "otro","apellido","apellido2"), sep = " ")
+
+#Selección de variables
+Base_SMS_completa <- Base_SMS_completa %>% 
+  select(FECHA_CITA, HORA_CITA, Celular_final,CLINICA, Nombre)
+
+#Arreglo variable hora
+Base_SMS_completa$HORA_CITA <- as.POSIXct(Base_SMS_completa$HORA_CITA * 24 * 3600, origin = "1970-01-01", tz = "UTC")
+
+Base_SMS_completa$HORA_CITA <- Base_SMS_completa$HORA_CITA + 30* 60
+
+Base_SMS_completa$HORA_CITA <- format(Base_SMS_completa$HORA_CITA, "%H:%M:%S")
+
+##Agregar datos Gisel
+Datos_Gisel <- c("2024-02-12","15:00:00",3012345677,"Dentix Armenia", "Gisel") 
+#-----Cambiar fecha^^^^
+
+Base_SMS_completa<- rbind(Datos_Gisel,Base_SMS_completa)
+
+Base_SMS_completa <- Base_SMS_completa %>% 
+        rename(TELEFONO="Celular_final") %>% 
+        rename(PACIENTE="Nombre")
+
+Base_SMS_completa <- Base_SMS_completa %>% 
+              relocate(TELEFONO,FECHA_CITA, HORA_CITA,CLINICA,PACIENTE)
+```
+
+Arreglos base de mensajes tarde
+```{r}
+Base_SMS_tarde<- Base_SMS_completa
+
+#Conversion a tipo fecha
+Base_SMS_tarde$HORA_CITA <- as.POSIXct(Base_SMS_tarde$HORA_CITA, format= "%H:%M:%S")
+Base_SMS_tarde <- Base_SMS_tarde %>% 
+mutate(hora=hour(HORA_CITA))
+
+#Filtro mayores a las 12 y re acomodo variable hora
+Base_SMS_tarde<- Base_SMS_tarde %>% 
+  filter(hora>=12)
+Base_SMS_tarde$HORA_CITA <- format(Base_SMS_tarde$HORA_CITA, "%H:%M:%S")
+
+Base_SMS_tarde <- select(Base_SMS_tarde,TELEFONO,FECHA_CITA, HORA_CITA,CLINICA,PACIENTE)
+```
+
+
+Arreglos base de mensajes whatsapp
+```{r}
+#Filtro de fecha
+Base_whatsapp_completa <- confirmacion_PV_2024_02 %>% 
+  filter(FECHA_CITA== today()+1 )
+
+#Filtro de variables
+Base_whatsapp_completa <- Base_whatsapp_completa %>% 
+  select(FECHA_CITA, HORA_CITA, Celular_final,CLINICA, PACIENTE)
+
+
+#Arreglo variable hora
+Base_whatsapp_completa$HORA_CITA <- as.POSIXct(Base_whatsapp_completa$HORA_CITA * 24 * 3600, origin = "1970-01-01", tz = "UTC")
+
+Base_whatsapp_completa$HORA_CITA <- Base_whatsapp_completa$HORA_CITA + 30* 60
+
+Base_whatsapp_completa$HORA_CITA <- format(Base_whatsapp_completa$HORA_CITA, "%H:%M:%S")
+
+Base_whatsapp_completa<- rbind(Datos_Gisel,Base_whatsapp_completa)
+
+#Agregar 57 a celular
+Base_whatsapp_completa$Celular_final<-  
+paste0 (57,Base_whatsapp_completa$Celular_final)
+
+#Filtro de clinica
+Base_whatsapp_completa <- Base_whatsapp_completa %>% 
+  filter(CLINICA !="Torre central")
+
+#COnvertir telefono a variable numerica
+Base_whatsapp_completa$Celular_final <- as.numeric(Base_whatsapp_completa$Celular_final)
+
+#Cambiar nombres de variables
+Base_whatsapp_completa <- Base_whatsapp_completa %>% 
+      rename(fecha="FECHA_CITA") %>% 
+      rename(hora="HORA_CITA") %>% 
+      rename(clinica="CLINICA") %>% 
+      rename(telefono="Celular_final") %>% 
+      rename(nombre_paciente="PACIENTE")
+
+Base_whatsapp_completa<- Base_whatsapp_completa %>% 
+      relocate(telefono,nombre_paciente,fecha,hora,clinica)
+```
+
+
+Selección emails siguiente día
+```{r}
+emails_siguiente_dia<- confirmacion_PV_2024_02 %>% 
+  filter(FECHA_CITA== today()+1 ) %>% 
+  filter(!is.na(email))
+emails_siguiente_dia<- select(emails_siguiente_dia, email)
+```
+
+Manipulacion base de emails
+```{r}
+##Filtro de fecha
+Base_emails_comp<- confirmacion_PV_2024_02 %>% 
+  filter(FECHA_CITA== today()+1 )%>% 
+  filter(!is.na(email))
+##Filtro de variables
+Base_emails_comp <- Base_emails_comp%>% 
+          select(PACIENTE,CLINICA,FECHA_CITA,HORA_CITA,email)
+#Renombrar variable y union de datos
+Base_emails_comp <- Base_emails_comp %>%  
+          rename(Clinica="CLINICA")
+
+#Arreglo variable hora
+Base_emails_comp$HORA_CITA <- as.POSIXct(Base_emails_comp$HORA_CITA * 24 * 3600, origin = "1970-01-01", tz = "UTC")
+
+Base_emails_comp$HORA_CITA <- Base_emails_comp$HORA_CITA + 30* 60
+
+Base_emails_comp$HORA_CITA <- format(Base_emails_comp$HORA_CITA, "%H:%M:%S")
+
+#Unión datos Gisel
+Datos_Gisel_email <- c("Gisel","Armenia","2024-02-12","15:00:00", "kat@gmail.com" )
+Base_emails_comp<- rbind(Datos_Gisel_email,Base_emails_comp)
+#---------------------^^^^
+
+#Unión datos de dirección
+Base_emails_comp<-Base_emails_comp %>%  
+  left_join(select(Plantillas_Clinicas_email,Clinica,`Dir. Publi`), by=  "Clinica")
+
+Base_emails_comp<- Base_emails_comp %>% 
+        rename(Direccion="Dir. Publi") %>% 
+      relocate(PACIENTE,Clinica,Direccion,FECHA_CITA,HORA_CITA,email)
+```
+
+
+
+Separacion de variable del celular
+```{r}
+confirmacion_O_2024_02 <- separate(confirmacion_O_2024_02, col = ASUNTO_CITA, into = c("Nombre", "otro"), sep = "\\[")
+
+confirmacion_O_2024_02 <- separate(confirmacion_O_2024_02, col = otro, into = c("celular", "otro"), sep = "\\]")
+
+confirmacion_O_2024_02 <- separate(confirmacion_O_2024_02, col = celular, into = c("celular_principal", "numero_secundario"), sep = "-")
+
+# Llenar numeros de celular vacios
+confirmacion_O_2024_02<- confirmacion_O_2024_02 %>% 
+  mutate(Celular_final= if_else(celular_principal== "  ",numero_secundario, celular_principal))
+
+#Convertir variable a tipo fecha
+confirmacion_O_2024_02$FECHA_CITA<- as.Date(confirmacion_O_2024_02$FECHA_CITA, format =  "%d/%m/%Y")
+
+#Eliminar numeros celulares fijos
+confirmacion_O_2024_02_SMS <- subset(confirmacion_O_2024_02, grepl("^3|^\\s", Celular_final))
+```
+
+Manipulacion mensajes texto tratamiento
+```{r}
+#
+confirmacion_O_2024_02_SMS$FECHA_CITA<- as.Date(confirmacion_O_2024_02_SMS$FECHA_CITA, format =  "%d/%m/%Y")
+
+#Arreglo variable hora
+confirmacion_O_2024_02_SMS$HORA_CITA <- as.POSIXct(confirmacion_O_2024_02_SMS$HORA_CITA * 24 * 3600, origin = "1970-01-01", tz = "UTC")
+
+confirmacion_O_2024_02_SMS$HORA_CITA <- format(confirmacion_O_2024_02_SMS$HORA_CITA, "%H:%M:%S")
+
+#Filtro de fecha
+mensajes_sms_tto <- confirmacion_O_2024_02_SMS %>%  #<-----------------------
+        filter(FECHA_CITA== today())
+
+#Seleccionar el nombre
+mensajes_sms_tto <- separate(mensajes_sms_tto, col = PACIENTE, into = c("Nombre", "otro","apellido","apellido2"), sep = " ")
+
+#Seleccion de variables
+mensajes_sms_tto<- mensajes_sms_tto %>% 
+  select(FECHA_CITA, HORA_CITA, Celular_final,CLINICA, Nombre)
+
+#Renombrar variable y union de datos
+mensajes_sms_tto <- mensajes_sms_tto %>%  
+          rename(Clinica="CLINICA")
+
+mensajes_sms_tto<-mensajes_sms_tto %>%  
+  left_join(select(Plantillas_Clinicas_email,Clinica,Telefono), by=  "Clinica")
+
+mensajes_sms_tto<-mensajes_sms_tto %>% 
+        relocate( Celular_final,FECHA_CITA, HORA_CITA,Clinica,Telefono, Nombre)
+
+mensajes_sms_tto<-mensajes_sms_tto %>%
+  rename(TELEFONO="Celular_final") %>% 
+  rename(PACIENTE="Nombre")
+
+mensajes_sms_tto<- mensajes_sms_tto %>% 
+  subset(!is.na(Telefono))
+```
+
+Arreglos base de mensajes tratamiento de la tarde
+```{r}
+
+SMS_TTO_tarde<- mensajes_sms_tto
+
+#Conversion a tipo fecha
+SMS_TTO_tarde$HORA_CITA <- as.POSIXct(SMS_TTO_tarde$HORA_CITA, format= "%H:%M:%S")
+SMS_TTO_tarde <- SMS_TTO_tarde %>% 
+mutate(hora=hour(HORA_CITA))
+
+#Filtro mayores a las 12 y re acomodo variable hora
+SMS_TTO_tarde<- SMS_TTO_tarde %>% 
+  filter(hora>=12)
+SMS_TTO_tarde$HORA_CITA <- format(SMS_TTO_tarde$HORA_CITA, "%H:%M:%S")
+
+SMS_TTO_tarde <- select(SMS_TTO_tarde,FECHA_CITA, HORA_CITA, TELEFONO,Clinica, PACIENTE)
+```
+
+Selección emails siguiente día tratamiento
+```{r}
+emails_siguiente_dia_tto<- confirmacion_O_2024_02 %>% 
+  filter(FECHA_CITA== today()+1 )%>% 
+  filter(!is.na(email))
+
+emails_siguiente_dia_tto<- select(emails_siguiente_dia_tto, email)
+```
+
+Manipulacion base de emails tratamiento
+```{r}
+##Filtro de fecha
+Base_emails_comp_tto<- confirmacion_O_2024_02 %>% 
+  filter(FECHA_CITA== today()+1 )%>% 
+  filter(!is.na(email))
+##Filtro de variables
+Base_emails_comp_tto <- Base_emails_comp_tto%>% 
+          select(PACIENTE,CLINICA,NOMBRE_AGENDA,FECHA_CITA,HORA_CITA,email)
+#Renombrar variable y union de datos
+Base_emails_comp_tto <- Base_emails_comp_tto %>%  
+          rename(Clinica="CLINICA")
+
+#Unión datos Gisel
+Datos_Gisel_email_tto <- c("Gisel","Armenia","Ortodoncista","2024-02-12","15:00:00", "kat@gmail.com" )
+Base_emails_comp_tto<- rbind(Datos_Gisel_email_tto,Base_emails_comp_tto)
+#---------------------^^^^
+
+#Unión datos de dirección
+Base_emails_comp_tto<-Base_emails_comp_tto %>%  
+  left_join(select(Plantillas_Clinicas_email,Clinica,`Dir. Publi`), by=  "Clinica")
+
+Base_emails_comp_tto<- Base_emails_comp_tto %>% 
+        rename(Direccion="Dir. Publi") %>% 
+        rename(Especialidad="NOMBRE_AGENDA") %>% 
+      relocate ( PACIENTE,Clinica,Especialidad,Direccion,FECHA_CITA,HORA_CITA,email)
+```
+
+
+```{r}
+write.csv( Base_SMS_completa,"Sms Conf Pv 20.02.2024 Completo")
+write.csv( Base_SMS_tarde,"Sms Conf Pv 20.02.2024 tarde")
+write.xlsx(Base_whatsapp_completa, "Whatsapp Conf Pv 20.02.2024.xlsx")
+write.csv(emails_siguiente_dia,"Email Conf Pv 20.02.2024")
+write.csv(Base_emails_comp,"Validacion Email Conf Pv 20.02.2024")
+write.csv(mensajes_sms_tto, "Sms Conf TTO 20.02.2024 Completo")
+write.csv(SMS_TTO_tarde, "Sms Conf TTO 20.02.2024 tarde")
+write.csv(emails_siguiente_dia_tto,"Email Conf TTO 20.02.2024")
+write.csv(Base_emails_comp_tto,"Validacion Email Conf Tto 20.02.2024")
+```
+
